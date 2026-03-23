@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>REGISTRARY VERIFY</title>
+  <style>
+    body { font-family: Arial; text-align: center; margin-top: 100px; }
+    .valid { color: green; font-size: 24px; }
+  </style>
+</head>
+<body>
+
+<h1>REGISTRARY VERIFY</h1>
+
+<p class="valid">STATUS: VALID</p>
+
+<p id="id"></p>
+
+<script>
+  const params = new URLSearchParams(window.location.search);
+  const id = params.get('id');
+  document.getElementById('id').innerText = "ID: " + id;
+</script>
+
+</body>
+</html>
