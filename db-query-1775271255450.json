@@ -1,0 +1,9 @@
+{
+  "query": "ALTER TABLE `users` ADD `userType` enum('CLIENT','DRIVER') DEFAULT 'CLIENT' NOT NULL;\nALTER TABLE `users` ADD `phone` varchar(20);\nALTER TABLE `users` ADD `cidade` varchar(100);",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway05.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3oDg5V46YgYep1F.877f91cb8bde --database g2Antxu9CpiaCEDqoJARTT --execute ALTER TABLE `users` ADD `userType` enum('CLIENT','DRIVER') DEFAULT 'CLIENT' NOT NULL;\nALTER TABLE `users` ADD `phone` varchar(20);\nALTER TABLE `users` ADD `cidade` varchar(100);",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 573
+}
