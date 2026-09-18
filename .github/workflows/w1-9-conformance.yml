@@ -1,0 +1,148 @@
+name: W1.9 Rust-Go Conformance
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'conformance/w1_9/**'
+      - '.github/workflows/w1-9-conformance.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Record toolchains
+        run: |
+          mkdir -p conformance/w1_9/out
+          rustc --version | tee conformance/w1_9/out/rustc-version.txt
+          cargo --version | tee conformance/w1_9/out/cargo-version.txt
+          go version | tee conformance/w1_9/out/go-version.txt
+          python3 --version | tee conformance/w1_9/out/python-version.txt
+          git rev-parse HEAD | tee conformance/w1_9/out/git-head.txt
+
+      - name: Reconstruct frozen W1.8.1 corpus
+        run: |
+          cat conformance/w1_9/corpus/chunk_*.b64 > conformance/w1_9/out/corpus.tar.xz.b64
+          base64 -d conformance/w1_9/out/corpus.tar.xz.b64 > conformance/w1_9/out/corpus.tar.xz
+          mkdir -p conformance/w1_9/out/corpus
+          tar -xJf conformance/w1_9/out/corpus.tar.xz -C conformance/w1_9/out/corpus
+          ROOT="conformance/w1_9/out/corpus/registrary_w1_8_1_frozen_corrected_v0_1"
+          test -f "$ROOT/schemas/w1.bundle.schema.json"
+          echo "$ROOT" > conformance/w1_9/out/corpus-root.txt
+
+      - name: Reconstruct exact frozen ZIP and verify input SHA-256
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile, hashlib
+          root=Path('conformance/w1_9/out/corpus/registrary_w1_8_1_frozen_corrected_v0_1')
+          out=Path('conformance/w1_9/out/W1_8_1_FROZEN_SCHEMA_SET_CORRECTED.zip')
+          with zipfile.ZipFile(out,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=9) as zf:
+              for p in sorted(root.rglob('*')):
+                  if not p.is_file():
+                      continue
+                  arc=f"{root.name}/{p.relative_to(root).as_posix()}"
+                  info=zipfile.ZipInfo(arc)
+                  info.date_time=(2026,9,17,18,0,0)
+                  info.compress_type=zipfile.ZIP_DEFLATED
+                  info.external_attr=(0o644 & 0xFFFF)<<16
+                  zf.writestr(info,p.read_bytes())
+          h=hashlib.sha256(out.read_bytes()).hexdigest()
+          expected='4fbb7ba7478eb443ac285bf9e55951755d9482b450e57a23244c327df057dc32'
+          print('reconstructed_zip_sha256='+h)
+          Path('conformance/w1_9/out/input-sha256.txt').write_text(h+'\n')
+          if h != expected:
+              raise SystemExit(f'INPUT HASH MISMATCH expected={expected} actual={h}')
+          PY
+
+      - name: Decode Go runner
+        run: |
+          base64 -d conformance/w1_9/go/main.go.gz.b64 | gzip -dc > conformance/w1_9/out/go_main.go
+
+      - name: Execute Go independently
+        run: |
+          ROOT="$(cat conformance/w1_9/out/corpus-root.txt)"
+          go run conformance/w1_9/out/go_main.go "$ROOT" conformance/w1_9/out/go.json > conformance/w1_9/out/go.stdout.json
+          python3 - <<'PY'
+          import json
+          p='conformance/w1_9/out/go.json'
+          d=json.load(open(p))
+          print('GO overall_status=',d['overall_status'])
+          print('GO inputs=',d['fixture_inputs'],'assertions=',d['assertion_count'])
+          assert d['overall_status']=='PASS'
+          PY
+
+      - name: Compile Rust independently
+        run: |
+          cargo build --release --manifest-path conformance/w1_9/rust/Cargo.toml
+
+      - name: Execute Rust independently
+        run: |
+          ROOT="$(cat conformance/w1_9/out/corpus-root.txt)"
+          cargo run --release --quiet --manifest-path conformance/w1_9/rust/Cargo.toml -- "$ROOT" conformance/w1_9/out/rust.json > conformance/w1_9/out/rust.stdout.json
+          python3 - <<'PY'
+          import json
+          p='conformance/w1_9/out/rust.json'
+          d=json.load(open(p))
+          print('RUST overall_status=',d['overall_status'])
+          print('RUST inputs=',d['fixture_inputs'],'assertions=',d['assertion_count'])
+          assert d['overall_status']=='PASS'
+          PY
+
+      - name: Compare six conformance classes
+        run: |
+          python3 conformance/w1_9/tools/compare_results.py conformance/w1_9/out/go.json conformance/w1_9/out/rust.json | tee conformance/w1_9/out/diff.json
+
+      - name: Build gate summary
+        if: always()
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, hashlib
+          out=Path('conformance/w1_9/out')
+          summary={
+            'input_sha256': (out/'input-sha256.txt').read_text().strip() if (out/'input-sha256.txt').exists() else None,
+            'go_exists': (out/'go.json').exists(),
+            'rust_exists': (out/'rust.json').exists(),
+            'diff_exists': (out/'diff.json').exists(),
+          }
+          if (out/'go.json').exists():
+              summary['go']=json.load(open(out/'go.json'))
+          if (out/'rust.json').exists():
+              summary['rust']=json.load(open(out/'rust.json'))
+          if (out/'diff.json').exists():
+              summary['diff']=json.load(open(out/'diff.json'))
+          summary['conformance_pass']=bool(
+              summary.get('input_sha256')=='4fbb7ba7478eb443ac285bf9e55951755d9482b450e57a23244c327df057dc32'
+              and summary.get('go',{}).get('overall_status')=='PASS'
+              and summary.get('rust',{}).get('overall_status')=='PASS'
+              and summary.get('diff',{}).get('equivalent') is True
+              and summary.get('diff',{}).get('diff_count')==0
+          )
+          (out/'gate-summary.json').write_text(json.dumps(summary,indent=2,ensure_ascii=False)+'\n')
+          print(json.dumps({
+              'input_sha256':summary.get('input_sha256'),
+              'go_status':summary.get('go',{}).get('overall_status'),
+              'rust_status':summary.get('rust',{}).get('overall_status'),
+              'diff_count':summary.get('diff',{}).get('diff_count'),
+              'equivalent':summary.get('diff',{}).get('equivalent'),
+              'conformance_pass':summary['conformance_pass'],
+          },indent=2))
+          PY
+
+      - name: Upload W1.9 execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: w1-9-conformance-evidence
+          path: conformance/w1_9/out/
+          if-no-files-found: error
